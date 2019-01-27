@@ -1,6 +1,6 @@
 # vertx-multipart-body-handler
 
-This is the implementation of BodyHandler in Vert.x for http multipart form file upload.
+This is the implementation of BodyHandler in Vert.x to handle file uploads for multipart form requests.
 
 The default implementation of BodyHandler in vert.x saves the uploaded files to the upload directory, and in the next pipeline handler, the uploaded files can be read from the upload directory. But it could come to performance bottleneck for some other cases.
 
