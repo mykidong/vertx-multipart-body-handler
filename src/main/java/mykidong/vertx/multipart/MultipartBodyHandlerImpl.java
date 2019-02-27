@@ -5,14 +5,12 @@ import io.vertx.core.Handler;
 import io.vertx.core.buffer.Buffer;
 import io.vertx.core.file.FileSystem;
 import io.vertx.core.http.HttpHeaders;
-import io.vertx.core.http.HttpServerFileUpload;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
-import io.vertx.core.streams.Pump;
-import io.vertx.core.streams.WriteStream;
 import io.vertx.ext.web.FileUpload;
 import io.vertx.ext.web.RoutingContext;
+import io.vertx.ext.web.handler.impl.BodyHandlerImpl;
 
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -155,6 +153,8 @@ public class MultipartBodyHandlerImpl implements MultipartBodyHandler {
 
             initBodyBuffer(contentLength);
 
+            BodyHandlerImpl imple;
+
             if (isMultipart || isUrlEncoded) {
                 context.request().setExpectMultipart(true);
 
@@ -172,65 +172,36 @@ public class MultipartBodyHandlerImpl implements MultipartBodyHandler {
                         // we actually upload to a file with a generated filename
                         uploadCount.incrementAndGet();
 
-                        // upload file stream will be put into routing context, namely, memory, not saved into upload directory.
-                        Pump p = Pump.pump(upload, new UploadWriteStream(fileUploads, upload));
-                        p.start();
+                        // NOTE: upload buffer stream 을 file upload directory 에 저장 하지 않음.
+                        // upload stream 에서 직접 buffer data 를 얻어 MultipartFileUploadImpl 에 넣은후 RoutingContext 로 전달.
+                        Buffer allBuffer = Buffer.buffer();
+                        upload.handler(buffer -> {
+                            allBuffer.appendBuffer(buffer);
+                        });
 
-                        upload.resume();
                         upload.exceptionHandler(t -> {
                             deleteFileUploads();
                             context.fail(t);
                         });
-                        upload.endHandler(v -> uploadEnded());
+                        upload.endHandler(v -> {
+                            MultipartFileUploadImpl fileUpload = new MultipartFileUploadImpl(null, upload, allBuffer.getBytes());
+                            fileUploads.add(fileUpload);
+
+                            int count = uploadCount.decrementAndGet();
+                            // only if parsing is done and count is 0 then all files have been processed
+                            if (ended && count == 0) {
+                                doEnd();
+                            }
+                        });
                     }
                 });
             }
+
 
             context.request().exceptionHandler(t -> {
                 deleteFileUploads();
                 context.fail(t);
             });
-        }
-
-        private class UploadWriteStream implements WriteStream<Buffer>
-        {
-            private Set<FileUpload> fileUploads;
-            private HttpServerFileUpload upload;
-
-            public UploadWriteStream(Set<FileUpload> fileUploads, HttpServerFileUpload upload)
-            {
-                this.fileUploads = fileUploads;
-                this.upload = upload;
-            }
-
-            public WriteStream<Buffer> exceptionHandler(Handler<Throwable> handler) {
-                return this;
-            }
-
-            public WriteStream<Buffer> write(Buffer buffer) {
-                byte[] data = buffer.getBytes();
-
-                // HERE!! upload file byte array is put to the context.
-                MultipartFileUploadImpl fileUpload = new MultipartFileUploadImpl(null, upload, data);
-                fileUploads.add(fileUpload);
-
-                return this;
-            }
-
-            public void end() {
-            }
-
-            public WriteStream<Buffer> setWriteQueueMaxSize(int maxSize) {
-                return this;
-            }
-
-            public boolean writeQueueFull() {
-                return false;
-            }
-
-            public WriteStream<Buffer> drainHandler(Handler<Void> handler) {
-                return this;
-            }
         }
 
 
@@ -272,14 +243,6 @@ public class MultipartBodyHandlerImpl implements MultipartBodyHandler {
                 if (!isMultipart /* && !isUrlEncoded */) {
                     body.appendBuffer(buff);
                 }
-            }
-        }
-
-        void uploadEnded() {
-            int count = uploadCount.decrementAndGet();
-            // only if parsing is done and count is 0 then all files have been processed
-            if (ended && count == 0) {
-                doEnd();
             }
         }
 
